@@ -24,6 +24,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from sklearn.kernel_approximation import RBFSampler
 
 from ..utils.stat_utils import robust_lookup
 
@@ -60,7 +61,8 @@ class CausalSimulator3(object):
                          "affine": lambda x, beta=None: CausalSimulator3._affine_link(x, beta),
                          "exp": lambda x, beta=None: CausalSimulator3._exp_linking(x, beta),
                          "log": lambda x, beta=None: CausalSimulator3._log_linking(x, beta),
-                         "poly": lambda x, beta=None: CausalSimulator3._poly_linking(x, beta)}
+                         "poly": lambda x, beta=None: CausalSimulator3._poly_linking(x, beta),
+                         "rbf": lambda x, beta=None: CausalSimulator3._rbf_linking(x, beta)}
     # O for outcome - outcome specific linking
     O_LINKING_METHODS = {
         "marginal_structural_model": lambda x, t, m, beta=None: CausalSimulator3._marginal_structural_model_link(
@@ -709,7 +711,8 @@ class CausalSimulator3(object):
                 cf[treatment_cat].loc[:, treatment_parent] = treatment_cat * treatment_importance
 
             linking_method = self.G_LINKING_METHODS.get(link_type)
-            beta = self.linking_coefs.get(var_name)
+            beta = self.params.get(var_name)
+            # warning, should be the same parameters for treated and untreated
             x_outcome, beta = linking_method(X_parents, beta=beta)
             cf = {i: linking_method(cf[i], beta=beta)[0] for i in list(cf.keys())}
 
@@ -1344,6 +1347,34 @@ class CausalSimulator3(object):
 
         return x_new, beta
 
+
+
+    @staticmethod
+    def _rbf_linking(X_parents, beta=None):
+        """
+        Create a variable linked with a [RBFSampler](https://scikit-learn.org/stable/modules/generated/sklearn.kernel_approximation.RBFSampler.html#sklearn-kernel-approximation-rbfsampler) followed by an affine combination of the created basis functions.
+
+        Args:
+            X_parents ([type]): [description]
+            beta ([type], optional): a Dictionnary with the RBFSampler parameters. Defaults to None.
+
+        Returns:
+            [type]: [description]
+        """
+        if beta is None:
+            beta = {
+                "n_components": 100,
+                "gamma": 1,
+                "random_state": 0,
+            }
+        rbf_feature = RBFSampler(gamma=beta["gamma"], n_components=beta["n_components"], random_state=beta["random_state"])
+        X_featurized = rbf_feature.fit_transform(X_parents)
+        X_featurized = pd.DataFrame(X_featurized, columns=[f"rbf_{i}" for i in range(X_featurized.shape[1])])
+        x_new, beta_affine = CausalSimulator3._affine_link(X_parents=X_featurized)
+        return x_new, {**beta, **beta_affine}
+
+        
+        
     @staticmethod
     def _marginal_structural_model_link(X_covariates, X_effmod, X_treatment, beta=None):
         """
